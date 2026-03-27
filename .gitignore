@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+input_frame.png
+output_*.png
+output_*.txt

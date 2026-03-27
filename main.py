@@ -1,18 +1,22 @@
-import os
 import sys
+import time
 import cv2
-import base64
-from io import BytesIO
 from PIL import Image
 from datetime import datetime
-from ollama import chat
-from ollama import ChatResponse
+from diffusers import StableDiffusionImg2ImgPipeline
+import torch
+
 
 def capture_frame():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Erro: nao foi possivel acessar a webcam.")
         sys.exit(1)
+
+    # Descarta alguns frames para a câmera ajustar exposição
+    for _ in range(30):
+        cap.read()
+    time.sleep(1)
 
     ret, frame = cap.read()
     cap.release()
@@ -25,42 +29,39 @@ def capture_frame():
     return Image.fromarray(frame_rgb)
 
 
-def analyze_image(frame: Image.Image, prompt: str) -> str:
-    """Analisa imagem usando Ollama + Llava localmente"""
-    
-    # Converte imagem para base64
-    buffered = BytesIO()
-    frame.save(buffered, format="PNG")
-    img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-    
-    try:
-        print("Processando com modelo local (ollama)...")
-        
-        # Envia para ollama
-        response: ChatResponse = chat(
-            model='llava:7b',
-            messages=[
-                {
-                    'role': 'user',
-                    'content': prompt,
-                    'images': [img_base64]
-                }
-            ],
-        )
-        
-        result = response.message.content
-        return result
-        
-    except Exception as e:
-        print(f"Erro ao conectar com Ollama: {e}")
-        print("Certifique-se que Ollama está rodando: ollama serve")
-        sys.exit(1)
+def generate_image(image: Image.Image, prompt: str, output_path: str):
+    """Transforma uma imagem usando Stable Diffusion img2img"""
+
+    print("Carregando modelo Stable Diffusion...")
+    pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+        "runwayml/stable-diffusion-v1-5",
+        torch_dtype=torch.float16,
+    )
+    pipe = pipe.to("cuda")
+
+    # Redimensiona para resolução compatível com o modelo
+    image = image.resize((512, 512))
+
+    print(f"Gerando imagem com prompt: {prompt}")
+    negative_prompt = "blurry, distorted, deformed, low quality, artifacts, ugly"
+    result = pipe(
+        prompt=prompt,
+        image=image,
+        negative_prompt=negative_prompt,
+        strength=0.55,
+        guidance_scale=7.5,
+        num_inference_steps=50,
+    )
+    output_image = result.images[0]
+
+    output_image.save(output_path)
+    print(f"Imagem salva em: {output_path}")
 
 
 def main():
     if len(sys.argv) < 2:
         print('Uso: python main.py "<seu prompt aqui>"')
-        print('Exemplo: python main.py "Descreva essa pessoa em detalhes"')
+        print('Exemplo: python main.py "transform into a watercolor painting"')
         sys.exit(1)
 
     prompt = sys.argv[1]
@@ -70,20 +71,10 @@ def main():
     frame.save("input_frame.png")
     print("Frame salvo em input_frame.png")
 
-    print(f"Enviando para Ollama com prompt: {prompt}")
-    result = analyze_image(frame, prompt)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = f"output_{timestamp}.png"
 
-    if result:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"output_{timestamp}.txt"
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(result)
-        print(f"\nResposta salva em {output_path}")
-        print(f"\n{'='*50}")
-        print("RESPOSTA:")
-        print(f"{'='*50}")
-        print(result)
-        print(f"{'='*50}")
+    generate_image(frame, prompt, output_path)
 
 
 if __name__ == "__main__":
